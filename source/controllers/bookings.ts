@@ -17,7 +17,10 @@ const healthCheck = async (req: Request, res: Response, next: NextFunction) => {
 const createBooking = async (req: Request, res: Response, next: NextFunction) => {
     const booking: Booking = req.body;
 
-    let outcome = await isBookingPossible(booking);
+    let checkOutDate = await calculateCheckoutDate(booking.checkInDate, booking.numberOfNights);
+
+    let outcome = await isBookingPossible(booking, checkOutDate);
+
     if (!outcome.result) {
         return res.status(400).json(outcome.reason);
     }
@@ -27,6 +30,7 @@ const createBooking = async (req: Request, res: Response, next: NextFunction) =>
              guestName: booking.guestName,
              unitID: booking.unitID,
              checkInDate: new Date(booking.checkInDate),
+             checkOutDate: checkOutDate,
              numberOfNights: booking.numberOfNights
        }
     })
@@ -36,7 +40,7 @@ const createBooking = async (req: Request, res: Response, next: NextFunction) =>
 
 type bookingOutcome = {result:boolean, reason:string};
 
-async function isBookingPossible(booking: Booking): Promise<bookingOutcome> {
+async function isBookingPossible(booking: Booking, checkOutDate: Date): Promise<bookingOutcome> {
     // check 1 : The Same guest cannot book the same unit multiple times
     let sameGuestSameUnit = await prisma.booking.findMany({
         where: {
@@ -66,24 +70,40 @@ async function isBookingPossible(booking: Booking): Promise<bookingOutcome> {
         return {result: false, reason: "The same guest cannot be in multiple units at the same time"};
     }
 
-    // check 3 : Unit is available for the check-in date
-    let isUnitAvailableOnCheckInDate = await prisma.booking.findMany({
-        where: {
-            AND: {
-                checkInDate: {
-                    equals: new Date(booking.checkInDate),
-                },
-                unitID: {
-                    equals: booking.unitID,
-                }
-            }
-        }
-    });
-    if (isUnitAvailableOnCheckInDate.length > 0) {
+  // check 3 : Unit is available for the date range generated with the given check-in date
+  let isUnitAvailableOnCheckInDate = await prisma.booking.findMany({
+    where: {
+      AND: [
+        {
+          unitID: {
+            equals: booking.unitID,
+          },
+        },
+        {
+          checkInDate: {
+            lt: new Date(checkOutDate),
+          },
+        },
+        {
+          checkOutDate: {
+            gt: new Date(booking.checkInDate),
+          },
+        },
+      ],
+    },
+  });
+  
+  if (isUnitAvailableOnCheckInDate.length > 0) {
         return {result: false, reason: "For the given check-in date, the unit is already occupied"};
     }
 
     return {result: true, reason: "OK"};
 }
+
+async function calculateCheckoutDate(startDate: Date, days: number): Promise<Date> {
+    const checkOutDate = new Date(startDate);
+    checkOutDate.setDate(checkOutDate.getDate() + days);
+    return checkOutDate;
+  }
 
 export default { healthCheck, createBooking }
